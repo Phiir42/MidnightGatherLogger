@@ -1,0 +1,18 @@
+# WoW SavedVariables (never commit user data)
+*.lua.bak
+MidnightGatherLoggerDB.lua
+
+# OS noise
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Release zips (build locally, distribute via GitHub Releases)
+*.zip
