@@ -1,6 +1,6 @@
 # MidnightGatherLogger
 
-A World of Warcraft addon for **Mining** and **Herbalism** that records per-gather data — node type, zone, loot, Auctionator prices, profession stats, spec tree state, and active buffs — so you can analyse your gathering routes and stat choices offline.
+A World of Warcraft addon for **Mining** and **Herbalism** that records per-gather data, including node type, zone, loot, Auctionator prices, profession stats, spec tree state, and active buffs, so you can analyse your gathering routes and stat choices offline.
 
 ## Features
 
