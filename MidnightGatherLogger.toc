@@ -1,8 +1,8 @@
-## Interface: 120002
+## Interface: 120005
 ## Title: MidnightGatherLogger
 ## Notes: Records per-gather yield, stats, and prices for offline analysis. |n|nUse /mgl for commands.
 ## Author: MidnightGatherLogger contributors
-## Version: 1.0.0
+## Version: 1.0.1
 ## SavedVariables: MidnightGatherLoggerDB
 ## OptionalDeps: Auctionator
 

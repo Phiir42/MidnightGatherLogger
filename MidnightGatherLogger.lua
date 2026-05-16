@@ -1,5 +1,5 @@
 --[[
-    MidnightGatherLogger v1.0.0
+    MidnightGatherLogger v1.0.1
     ============================
     Records per-gather data for Mining and Herbalism: zone, position, node type,
     items looted, Auctionator prices, profession stats, spec tree state, and
@@ -30,7 +30,7 @@
 ]]
 
 local ADDON_NAME     = "MidnightGatherLogger"
-local VERSION        = "1.0.0"
+local VERSION        = "1.0.1"
 local SCHEMA_VERSION = 3
 
 local DB
@@ -211,10 +211,21 @@ end
 -- =========================================================================
 -- Auctionator integration (optional)
 -- =========================================================================
+-- The Auctionator.API.v1.GetAuctionPriceByItemID(callerID, itemID) function
+-- raises a Lua error if its arguments fail a type check (callerID must be a
+-- string, itemID a number).  We can't always be 100% sure the loot capture
+-- gave us a valid itemID, so pcall the call to avoid taking down the whole
+-- event handler on a single malformed loot row.
 local function lookupPrice(itemID)
-    if not (Auctionator and Auctionator.API and Auctionator.API.v1) then return nil end
-    if not itemID then return nil end
-    return Auctionator.API.v1.GetAuctionPriceByItemID(ADDON_NAME, itemID)
+    if not (Auctionator and Auctionator.API and Auctionator.API.v1
+            and Auctionator.API.v1.GetAuctionPriceByItemID) then
+        return nil
+    end
+    if type(itemID) ~= "number" then return nil end
+    local ok, price = pcall(
+        Auctionator.API.v1.GetAuctionPriceByItemID, ADDON_NAME, itemID)
+    if ok then return price end
+    return nil
 end
 
 -- =========================================================================
@@ -368,20 +379,13 @@ end
 -- =========================================================================
 local STAT_KEYS = { finesse = true, deftness = true, perception = true }
 
+-- Stub kept for forward compatibility: at some future point Blizzard may add
+-- a direct API for reading gathering stats, but as of patch 12.0.5 the
+-- functions C_TradeSkillUI.GetGatheringStats and C_TradeSkillUI.GetProfessionStats
+-- do not exist (verified against the patch-12.0.5 API listing).  Returning
+-- nil lets callers fall through to scanJournalFrame() unconditionally today,
+-- while leaving an obvious place to hook a real API in later.
 local function tryDirectJournalAPI(lineID)
-    if not C_TradeSkillUI then return nil end
-    if C_TradeSkillUI.GetGatheringStats then
-        local r = C_TradeSkillUI.GetGatheringStats(lineID)
-        if type(r) == "table" and (r.finesse or r.perception or r.deftness) then
-            return { finesse=r.finesse, deftness=r.deftness, perception=r.perception }
-        end
-    end
-    if C_TradeSkillUI.GetProfessionStats then
-        local r = C_TradeSkillUI.GetProfessionStats(lineID)
-        if type(r) == "table" and (r.finesse or r.perception or r.deftness) then
-            return { finesse=r.finesse, deftness=r.deftness, perception=r.perception }
-        end
-    end
     return nil
 end
 
@@ -623,11 +627,17 @@ end
 
 local function captureBuffs()
     local buffs = {}
+    if not (C_UnitAuras and C_UnitAuras.GetBuffDataByIndex) then
+        return buffs
+    end
+    -- The buff list can have holes — `C_UnitAuras.GetBuffDataByIndex` can
+    -- return nil for an index even when there are more buffs at higher
+    -- indices (Blizzard bug, see forum thread "Broken buff list" 2024-08).
+    -- So iterate the whole 1..40 range without breaking on the first nil.
+    -- Note: in Midnight some personal combat-state auras may be redacted
+    -- ("SecretWhenUnitAuraRestricted"); we just record whatever's visible.
     for i = 1, 40 do
-        local aura
-        if C_UnitAuras and C_UnitAuras.GetBuffDataByIndex then
-            aura = C_UnitAuras.GetBuffDataByIndex("player", i)
-        end
+        local aura = C_UnitAuras.GetBuffDataByIndex("player", i)
         if aura then
             table.insert(buffs, {
                 name           = aura.name,
@@ -635,8 +645,6 @@ local function captureBuffs()
                 expirationTime = aura.expirationTime,
                 duration       = aura.duration,
             })
-        else
-            break
         end
     end
     return buffs
@@ -820,8 +828,14 @@ f:SetScript("OnEvent", function(self, event, ...)
         setupMinimapButton()
         setupLDBFeed()
         return
+    end
 
-    elseif event == "TRADE_SKILL_SHOW" then
+    -- Any non-LOGIN event arriving before PLAYER_LOGIN (reload-during-cast,
+    -- early /reload during loot, etc.) would crash on DB.paused below.
+    -- Bail out until DB is initialised.
+    if not DB then return end
+
+    if event == "TRADE_SKILL_SHOW" then
         installJournalHook()
         C_Timer.After(0.1, function() cacheCurrentProfessionConfig() end)
         C_Timer.After(0.3, function() printMissingSources() end)
@@ -1119,14 +1133,23 @@ SlashCmdList["MGL"] = function(msg)
         end
 
         -- Copy to clipboard
+        -- The real API is the global CopyToClipboard(text [, removeMarkup]).
+        -- There is no `C_Clipboard.Copy` in retail WoW (the namespaced form
+        -- was a misremembered name).  Pass `true` for removeMarkup so any
+        -- accidental escape codes don't get pasted into a spreadsheet.
         local csv = table.concat(lines, "\n")
-        if C_Clipboard and C_Clipboard.Copy then
-            C_Clipboard.Copy(csv)
-            print(string.format(
-                "|cff66ccffMGL|r %d events copied to clipboard as CSV "
-                .. "(paste into a spreadsheet).", nEv))
+        if type(CopyToClipboard) == "function" then
+            local copied = CopyToClipboard(csv, true)
+            if copied and copied > 0 then
+                print(string.format(
+                    "|cff66ccffMGL|r %d events copied to clipboard as CSV "
+                    .. "(paste into a spreadsheet).", nEv))
+            else
+                print("|cff66ccffMGL|r clipboard copy returned 0 — "
+                      .. "the data is still in SavedVariables.")
+            end
         else
-            print("|cff66ccffMGL|r clipboard API unavailable — "
+            print("|cff66ccffMGL|r CopyToClipboard unavailable on this build — "
                   .. "use the SavedVariables file for raw data.")
         end
 
@@ -1744,7 +1767,8 @@ SlashCmdList["MGL"] = function(msg)
                         print(indent .. "  name: " .. spellName)
                     end
                     local srcText = C_ProfSpecs.GetSourceTextForPath
-                                    and C_ProfSpecs.GetSourceTextForPath(pathID)
+                                    and C_ProfSpecs.GetSourceTextForPath(
+                                        pathID, traitConfigID)
                     if srcText and srcText ~= "" then
                         print(indent .. "  sourceText: " .. srcText)
                     end

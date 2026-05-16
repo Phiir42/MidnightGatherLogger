@@ -2,6 +2,42 @@
 
 All notable changes to MidnightGatherLogger are documented here.
 
+## [1.0.1] — 2026-05-16
+
+Bug-fix release. Audited every Blizzard and Auctionator API call against the patch 12.0.5 (Midnight) documentation. Several were "guessed at" and either didn't exist or had wrong signatures.
+
+### Fixed
+- **`/mgl export` clipboard copy was broken.** `C_Clipboard.Copy` does not exist in retail WoW — the real API is the global `CopyToClipboard(text [, removeMarkup])`. Replaced the call and pass `removeMarkup = true` so escape codes don't leak into spreadsheets.
+- **Dead-API fallback in `tryDirectJournalAPI` removed.** Neither `C_TradeSkillUI.GetGatheringStats` nor `C_TradeSkillUI.GetProfessionStats` exists per the patch 12.0.5 API listing. Function kept as a `return nil` stub so callers fall through to `scanJournalFrame()` unconditionally; leaves an obvious place to hook a real API in later.
+- **Buff scanner missed buffs after a nil slot.** `C_UnitAuras.GetBuffDataByIndex` can return nil for an index even when later indices still have buffs (Blizzard bug). The previous `break` on first nil silently dropped everything past a hole. Now iterates all 40 indices without breaking.
+- **`nodedump` source text never appeared.** `C_ProfSpecs.GetSourceTextForPath` takes `(pathID, configID)` per Wowpedia; the call was passing only `pathID` and returning nil. Now passes both.
+- **Auctionator API errors no longer kill the event handler.** `Auctionator.API.v1.GetAuctionPriceByItemID` raises a Lua error on bad arg types (`Composer` error pattern in their issue tracker). Wrapped in `pcall` and added a `type(itemID) == "number"` guard.
+- **Race-condition crash on `/reload`.** If any event other than `PLAYER_LOGIN` fired first (possible if you reload mid-cast), the handler hit `if DB.paused` before `DB` was set and crashed. Added an `if not DB then return end` guard immediately after the LOGIN branch.
+
+### Changed
+- **TOC `## Interface: 120002 → 120005`** to match current Midnight patch (12.0.5).
+- **Version 1.0.0 → 1.0.1** in both the Lua header and the TOC.
+
+### Verified correct (no change)
+The audit confirmed these were already right and should not be touched:
+- `KNOWN_SOURCES` herb and ore names match the released Midnight zone guides (Tranquility Bloom, Sanguithorn, Azeroot, Argentleaf, Mana Lily for herbs; Refulgent Copper, Umbral Tin, Brilliant Silver for ores; Lush / Wild / Lightfused / Primal / Voidbound variants; Seam suffix for mining).
+- `PCT_TO_RAW` factors (Finesse ×10.0, Deftness ×6.012, Perception ×10.0) — derived empirically, not from API.
+- `C_ProfSpecs` API surface: `GetSpecTabIDsForSkillLine`, `GetConfigIDForSkillLine`, `GetTabInfo`, `GetRootPathForTab`, `GetChildrenForPath`, `GetPerksForPath`, `GetDescriptionForPath`, `GetDescriptionForPerk` — all real.
+- `C_Traits` API surface: `GetConfigInfo`, `GetTreeNodes`, `GetNodeInfo`, `GetDefinitionInfo` — all real, signatures correct.
+- `C_UnitAuras.GetBuffDataByIndex(unit, index)` — real, returns `AuraData` table with `name`, `spellId`, `expirationTime`, `duration`. Note: in Midnight some personal combat-state auras may be redacted (`SecretWhenUnitAuraRestricted`); gathering use cases are unaffected.
+- `Auctionator.API.v1.GetAuctionPriceByItemID(callerID, itemID)` — confirmed signature against Auctionator's own API documentation.
+- `UnitName("softinteract")` — real unit token added in 10.0.0, intended for gathering nodes / NPCs.
+- `DISPLAY_EVENT_TOAST_LINK` event with single `link` arg — added in 9.1.0, still active.
+- `TRAIT_CONFIG_UPDATED` event with `configID` arg — fires on profession point spending.
+- `C_TradeSkillUI.GetItemCraftedQualityByItemInfo` — real.
+- `hooksecurefunc(table, methodName, hookFunc)` — correct calling convention.
+- `GetProfessions()` and `GetProfessionInfo(index)` — still globals in 12.x; `lineID` is the 7th return value.
+
+### Known limitations carried over from 1.0.0
+- The in-world target name returned by `UnitName("target")` when you click a node may not exactly match the journal entry name (e.g. world node may be `"Refulgent Copper Deposit"` vs journal `"Refulgent Copper"`). `resolveNodeStats` already tries the full target name first, then the parsed base name. If `/mgl statsreport` after a real session shows everything falling back to `(global)`, run `/mgl scan` while soft-targeting a node to learn the exact world string and adjust `KNOWN_SOURCES` or add manual entries with `/mgl setstats`.
+
+---
+
 ## [1.0.0] — 2026-05-10
 
 First public release.
