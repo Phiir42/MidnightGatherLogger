@@ -2,6 +2,24 @@
 
 All notable changes to MidnightGatherLogger are documented here.
 
+## [1.0.3] — 2026-05-17
+
+Second follow-up after live testing of 1.0.2.
+
+### Fixed
+- **`/mgl export` popup appeared empty.** The StaticPopup `hasEditBox` form gives a single-line editbox per Wowpedia, which can't render CSV containing `\n` newlines — the box visually shows nothing. Replaced with a custom movable `BasicFrameTemplateWithInset` frame containing a `ScrollFrame` wrapping a multi-line `EditBox`. This is the WeakAuras / TomTom export pattern and works universally for arbitrary text length. Both `SetMaxBytes(0)` and `SetMaxLetters(0)` are called explicitly on the editbox so long sessions aren't truncated.
+
+### Changed
+- **`specreport` sub-node ranks now show `purchased / max` instead of `current / max`.** The grant indicator switches from `(+N grant)` to `(current N)` and only appears when external grants raise the visible rank above what the player has actually purchased. A one-time legend prints at the top of the report explaining that a `max` of 41 (rather than the underlying spend cap of 40) indicates an unlock-bonus node where the +1 "initial selection" rank is granted free once the parent has enough points invested. The C_Traits API appears to bundle that +1 into `ranksPurchased` rather than treat it as a grant, so we can't programmatically subtract it from the displayed number — the legend communicates this honestly rather than silently miscounting.
+
+### Verified during 1.0.2 → 1.0.3 testing (no fix needed)
+- `/mgl statsreport [filter]` works correctly (alphabetical, filter applies).
+- `/mgl help` columns are uniform per-character now.
+- `/mgl specreport` correctly walks `GetRootPathForTab` → `GetChildrenForPath` and resolves node names via `C_Spell.GetSpellName` (Lily Looter, Bloom Bringer, Root Rummager, Silver Searcher, Thorn Thresher, Mulching, Cultivation all render with their real names — no `node_NNNNN` fallbacks).
+- The depth-walk sums match the tab purchased total (188 = 41+23+1+41+41+41), confirming `C_ProfSpecs.GetRootPathForTab` and `GetChildrenForPath` give complete coverage of the spent-points tree. The +42 grant delta between tab `purchased` and tab `current` lives on nodes outside the path tree (presumably the granted-on-tab-unlock bonus nodes — they don't appear in the path walk by design).
+
+---
+
 ## [1.0.2] — 2026-05-17
 
 Follow-up release after live in-game testing of 1.0.1.

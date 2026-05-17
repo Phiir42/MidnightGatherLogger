@@ -1,5 +1,5 @@
 --[[
-    MidnightGatherLogger v1.0.2
+    MidnightGatherLogger v1.0.3
     ============================
     Records per-gather data for Mining and Herbalism: zone, position, node type,
     items looted, Auctionator prices, profession stats, spec tree state, and
@@ -30,7 +30,7 @@
 ]]
 
 local ADDON_NAME     = "MidnightGatherLogger"
-local VERSION        = "1.0.2"
+local VERSION        = "1.0.3"
 local SCHEMA_VERSION = 3
 
 local DB
@@ -1132,45 +1132,74 @@ SlashCmdList["MGL"] = function(msg)
                 totalCopper))
         end
 
-        -- Show the CSV in a popup EditBox so the user can copy it.
-        -- We tried `CopyToClipboard` directly first; it's documented but
-        -- listed under "API functions/restricted" on Wowpedia, and in
-        -- practice it returns 0 (silently refuses) from a slash-command
-        -- handler because that's not the right hardware-event context.
-        -- The popup-with-EditBox pattern is what every well-known addon
-        -- uses (WeakAuras imports, TomTom paste, Talent Tree Tweaks) and
-        -- works universally — the user's own Ctrl+C is the hardware event.
+        -- Show the CSV in a custom multi-line popup so the user can copy it.
+        -- We previously tried `CopyToClipboard` (silently refused — it's in
+        -- the "API functions/restricted" category), then a StaticPopup with
+        -- hasEditBox (failed because that gives a SINGLE-line editbox which
+        -- can't render \n-separated CSV — the box appears empty).  The
+        -- universal pattern is a custom frame with a ScrollFrame wrapping
+        -- a multi-line EditBox; the user's Ctrl+A / Ctrl+C is a real
+        -- hardware event in that context, so the copy works reliably.
+        local function showExportFrame(text)
+            local f = _G["MGL_ExportFrame"]
+            if not f then
+                f = CreateFrame("Frame", "MGL_ExportFrame", UIParent,
+                                "BasicFrameTemplateWithInset")
+                f:SetSize(560, 400)
+                f:SetPoint("CENTER")
+                f:SetFrameStrata("DIALOG")
+                f:SetMovable(true); f:EnableMouse(true); f:SetClampedToScreen(true)
+                f:RegisterForDrag("LeftButton")
+                f:SetScript("OnDragStart", f.StartMoving)
+                f:SetScript("OnDragStop",  f.StopMovingOrSizing)
+                f:SetScript("OnKeyDown", function(self, key)
+                    if key == "ESCAPE" then self:Hide() end
+                end)
+                f:SetPropagateKeyboardInput(true)
+
+                -- Title in the BasicFrameTemplateWithInset header
+                f.TitleText:SetText("MidnightGatherLogger — Export")
+
+                -- Instruction line under the title
+                f.instr = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+                f.instr:SetPoint("TOP", 0, -28)
+                f.instr:SetText("Press Ctrl+A to select all, then Ctrl+C to copy. "
+                                .. "Esc closes.")
+
+                -- ScrollFrame + multi-line EditBox.  This is the standard
+                -- WeakAuras-style export pattern.
+                local scroll = CreateFrame("ScrollFrame", nil, f,
+                                           "UIPanelScrollFrameTemplate")
+                scroll:SetPoint("TOPLEFT", 12, -48)
+                scroll:SetPoint("BOTTOMRIGHT", -32, 12)
+                f.scroll = scroll
+
+                local edit = CreateFrame("EditBox", nil, scroll)
+                edit:SetMultiLine(true)
+                edit:SetFontObject("ChatFontNormal")
+                edit:SetAutoFocus(false)
+                edit:SetWidth(500)
+                edit:SetMaxBytes(0)    -- 0 = unlimited per API docs
+                edit:SetMaxLetters(0)  -- 0 = unlimited; set both for safety
+                edit:SetScript("OnEscapePressed", function() f:Hide() end)
+                -- Prevent edits from "sticking" — we want a read-only feel
+                -- but EditBox doesn't have a true read-only mode, so just
+                -- re-highlight on any change as a UX cue.
+                scroll:SetScrollChild(edit)
+                f.edit = edit
+            end
+
+            f.edit:SetText(text)
+            f.edit:HighlightText(0, -1)
+            f.edit:SetCursorPosition(0)
+            f.edit:SetFocus()
+            f:Show()
+        end
+
         local csv = table.concat(lines, "\n")
-        StaticPopupDialogs["MGL_EXPORT_CSV"] = {
-            text       = "MidnightGatherLogger CSV — press Ctrl+A then Ctrl+C to copy:",
-            button1    = "Close",
-            hasEditBox = true,
-            editBoxWidth = 350,
-            -- WoW silently truncates EditBox content above ~32k chars;
-            -- raise the cap so long sessions still export fully.
-            maxLetters = 0,
-            OnShow     = function(self)
-                self.editBox:SetText(csv)
-                self.editBox:HighlightText()
-                self.editBox:SetFocus()
-            end,
-            OnHide     = function(self)
-                self.editBox:SetText("")
-            end,
-            EditBoxOnEscapePressed = function(self)
-                self:GetParent():Hide()
-            end,
-            EditBoxOnEnterPressed  = function(self)
-                self:GetParent():Hide()
-            end,
-            timeout        = 0,
-            whileDead      = true,
-            hideOnEscape   = true,
-            preferredIndex = STATICPOPUP_NUMDIALOGS,
-        }
-        StaticPopup_Show("MGL_EXPORT_CSV")
+        showExportFrame(csv)
         print(string.format(
-            "|cff66ccffMGL|r %d events ready — popup opened, press Ctrl+A then Ctrl+C.",
+            "|cff66ccffMGL|r %d events ready — popup opened, Ctrl+A then Ctrl+C.",
             nEv))
 
         -- Chat summary
@@ -1377,7 +1406,8 @@ SlashCmdList["MGL"] = function(msg)
             return defInfo.overrideName or defInfo.name, nodeInfo
         end
 
-        local anyData = false
+        local anyData   = false
+        local anyHeader = false
         for prof, profID in pairs(professionConfigIDs) do
             local traitConfigID = C_ProfSpecs.GetConfigIDForSkillLine
                                   and C_ProfSpecs.GetConfigIDForSkillLine(profID)
@@ -1389,6 +1419,19 @@ SlashCmdList["MGL"] = function(msg)
             else
                 anyData = true
                 print(string.format("|cff66ccffMGL|r [%s]", prof))
+                if not anyHeader then
+                    -- One-time legend explaining what the numbers mean.
+                    -- The +1 "initial selection" bonus appears to be baked
+                    -- into ranksPurchased by the API (we can't subtract it
+                    -- programmatically), so maxRanks of 41 instead of 40
+                    -- is the visible signature of an unlock-bonus node.
+                    print("  format: <name>  <purchased> / <max>"
+                          .. "  (a max of 41 includes the +1 'initial"
+                          .. " selection' bonus when the parent has"
+                          .. " enough points; 'current N' appears when"
+                          .. " external grants are active)")
+                    anyHeader = true
+                end
                 for _, tabID in ipairs(tabIDs) do
                     local ti    = C_ProfSpecs.GetTabInfo
                                   and C_ProfSpecs.GetTabInfo(tabID)
@@ -1430,16 +1473,19 @@ SlashCmdList["MGL"] = function(msg)
                                 local pur = nodeInfo and nodeInfo.ranksPurchased or 0
                                 local mx  = nodeInfo and nodeInfo.maxRanks      or 0
                                 if mx > 0 then
-                                    -- Show as `name  cur/max` with a
-                                    -- " (+N grant)" tag when grants raise
-                                    -- the visible rank above purchased.
+                                    -- Show purchased/max as the primary
+                                    -- value (most honest semantic — these
+                                    -- are points the player has committed).
+                                    -- When current > purchased the diff is
+                                    -- from external grants/bonuses that
+                                    -- aren't counted in ranksPurchased.
                                     local tag = (cur > pur)
-                                        and string.format(" (+%d grant)", cur - pur)
+                                        and string.format(" (current %d)", cur)
                                         or ""
                                     print(string.format("%s%-28s  %d / %d%s",
                                         indent,
                                         nodeName or ("node_" .. pathID),
-                                        cur, mx, tag))
+                                        pur, mx, tag))
                                 end
                                 if C_ProfSpecs.GetChildrenForPath then
                                     for _, child in ipairs(
