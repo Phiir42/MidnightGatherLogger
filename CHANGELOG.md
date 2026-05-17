@@ -2,6 +2,27 @@
 
 All notable changes to MidnightGatherLogger are documented here.
 
+## [1.0.4] — 2026-05-17
+
+Third follow-up after live testing of 1.0.3.
+
+### Fixed
+- **CSV export was eating the letter R from Refulgent Copper Ore.** Previous item separator was `|` and the next item starting with `R` produced `x6|Refulgent` in the SetText input. WoW's EditBox parser treats `|r` as the color-reset markup code, and the case-insensitivity bites here: `|R` is consumed as if it were `|r`, swallowing both characters and leaving `x6efulgent Copper Ore`. Only items starting with R were affected; `|M` (Mote), `|T` (Tranquility), `|S` (Sanguithorn), etc. survive because those letters aren't markup codes. Switched the items separator to ` ; ` (space-semicolon-space) which is pipe-free and won't collide with the bare-semicolon output of the existing comma-to-semicolon field sanitization.
+
+### Known caveats observed during 1.0.3 → 1.0.4 testing (not a bug, worth documenting)
+- **Wild-node ambient loot is attached to the gather event.** When a Lightfused/Wild/etc. node spawns mobs that drop loot within the 5-second commit window after `UNIT_SPELLCAST_SUCCEEDED`, the addon attributes that loot to the gather. Example from testing: a Lightfused Tranquility Bloom gather captured `Glowing Shrub`, `Bloody Broken Beak`, `Plant Protein` — none of which are herbalism outputs. The commit window is necessary to catch the real loot that streams in after the cast completes; filtering ambient drops would need an item-category whitelist. Worth post-processing the CSV with awareness of this; the structured SavedVariables data has per-item `itemID` and `quality` for filtering.
+- **Item names still contain `|A:Professions-ChatIcon-Quality-...|a` atlas markup.** This is the in-game quality icon. It survives the export (atlas markers are not consumed by the EditBox parser, unlike color codes). `Tier1` in the marker means silver-quality, `Tier2` means gold-quality. The structured per-item data in SavedVariables has a separate `quality` field, so the atlas markers are redundant for analysis — but they're retained in the CSV in case offline tooling wants them.
+
+### Verified during 1.0.3 → 1.0.4 testing (no fix needed)
+- Export popup renders the CSV correctly (multi-line, scrollable, Ctrl+A / Ctrl+C copies the text to the OS clipboard).
+- Profession detection works for both gathering professions in Midnight: spell IDs `471009` (Herbalism) and `471013` (Mining) are correct.
+- Node modifier parsing works correctly for both prefix (`lightfused`) and absence (rendered as `base` in CSV).
+- Auctionator integration is working: prices come through in copper and totals are sensible.
+- Subzone capture works (multiple Eversong Woods subzones recorded: Stillwhisper Pond, Fairbreeze Village, Runestone Falithas, Lightbloom Ath'Ran, Elrendar River, Tranquil Repose).
+- Session ID is consistent across an entire play session.
+
+---
+
 ## [1.0.3] — 2026-05-17
 
 Second follow-up after live testing of 1.0.2.

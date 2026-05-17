@@ -1,5 +1,5 @@
 --[[
-    MidnightGatherLogger v1.0.3
+    MidnightGatherLogger v1.0.4
     ============================
     Records per-gather data for Mining and Herbalism: zone, position, node type,
     items looted, Auctionator prices, profession stats, spec tree state, and
@@ -30,7 +30,7 @@
 ]]
 
 local ADDON_NAME     = "MidnightGatherLogger"
-local VERSION        = "1.0.3"
+local VERSION        = "1.0.4"
 local SCHEMA_VERSION = 3
 
 local DB
@@ -1128,7 +1128,15 @@ SlashCmdList["MGL"] = function(msg)
                 ev.session_id  or "",
                 prof, zone, subzone, target, base, mod,
                 #(ev.items or {}),
-                table.concat(itemNames, "|"):gsub(",", ";"),
+                -- Item separator: " ; " (space-semicolon-space).
+                -- Was "|" but WoW's EditBox parser treats |r as the
+                -- color-reset code CASE-INSENSITIVELY, so "x6|Refulgent"
+                -- became "x6efulgent" when SetText'd into the export
+                -- popup — the |R was consumed as a markup directive.
+                -- "; " sidesteps it entirely; bare-semicolons from the
+                -- ,->; sanitization can't collide because they lack
+                -- the surrounding spaces.
+                table.concat(itemNames, " ; "):gsub(",", ";"),
                 totalCopper))
         end
 
