@@ -2,7 +2,7 @@
 ## Title: MidnightGatherLogger
 ## Notes: Records per-gather yield, stats, and prices for offline analysis. |n|nUse /mgl for commands.
 ## Author: MidnightGatherLogger contributors
-## Version: 1.0.1
+## Version: 1.0.2
 ## SavedVariables: MidnightGatherLoggerDB
 ## OptionalDeps: Auctionator
 

@@ -1,5 +1,5 @@
 --[[
-    MidnightGatherLogger v1.0.1
+    MidnightGatherLogger v1.0.2
     ============================
     Records per-gather data for Mining and Herbalism: zone, position, node type,
     items looted, Auctionator prices, profession stats, spec tree state, and
@@ -30,7 +30,7 @@
 ]]
 
 local ADDON_NAME     = "MidnightGatherLogger"
-local VERSION        = "1.0.1"
+local VERSION        = "1.0.2"
 local SCHEMA_VERSION = 3
 
 local DB
@@ -1132,26 +1132,46 @@ SlashCmdList["MGL"] = function(msg)
                 totalCopper))
         end
 
-        -- Copy to clipboard
-        -- The real API is the global CopyToClipboard(text [, removeMarkup]).
-        -- There is no `C_Clipboard.Copy` in retail WoW (the namespaced form
-        -- was a misremembered name).  Pass `true` for removeMarkup so any
-        -- accidental escape codes don't get pasted into a spreadsheet.
+        -- Show the CSV in a popup EditBox so the user can copy it.
+        -- We tried `CopyToClipboard` directly first; it's documented but
+        -- listed under "API functions/restricted" on Wowpedia, and in
+        -- practice it returns 0 (silently refuses) from a slash-command
+        -- handler because that's not the right hardware-event context.
+        -- The popup-with-EditBox pattern is what every well-known addon
+        -- uses (WeakAuras imports, TomTom paste, Talent Tree Tweaks) and
+        -- works universally — the user's own Ctrl+C is the hardware event.
         local csv = table.concat(lines, "\n")
-        if type(CopyToClipboard) == "function" then
-            local copied = CopyToClipboard(csv, true)
-            if copied and copied > 0 then
-                print(string.format(
-                    "|cff66ccffMGL|r %d events copied to clipboard as CSV "
-                    .. "(paste into a spreadsheet).", nEv))
-            else
-                print("|cff66ccffMGL|r clipboard copy returned 0 — "
-                      .. "the data is still in SavedVariables.")
-            end
-        else
-            print("|cff66ccffMGL|r CopyToClipboard unavailable on this build — "
-                  .. "use the SavedVariables file for raw data.")
-        end
+        StaticPopupDialogs["MGL_EXPORT_CSV"] = {
+            text       = "MidnightGatherLogger CSV — press Ctrl+A then Ctrl+C to copy:",
+            button1    = "Close",
+            hasEditBox = true,
+            editBoxWidth = 350,
+            -- WoW silently truncates EditBox content above ~32k chars;
+            -- raise the cap so long sessions still export fully.
+            maxLetters = 0,
+            OnShow     = function(self)
+                self.editBox:SetText(csv)
+                self.editBox:HighlightText()
+                self.editBox:SetFocus()
+            end,
+            OnHide     = function(self)
+                self.editBox:SetText("")
+            end,
+            EditBoxOnEscapePressed = function(self)
+                self:GetParent():Hide()
+            end,
+            EditBoxOnEnterPressed  = function(self)
+                self:GetParent():Hide()
+            end,
+            timeout        = 0,
+            whileDead      = true,
+            hideOnEscape   = true,
+            preferredIndex = STATICPOPUP_NUMDIALOGS,
+        }
+        StaticPopup_Show("MGL_EXPORT_CSV")
+        print(string.format(
+            "|cff66ccffMGL|r %d events ready — popup opened, press Ctrl+A then Ctrl+C.",
+            nEv))
 
         -- Chat summary
         if nEv == 0 then
@@ -1227,7 +1247,7 @@ SlashCmdList["MGL"] = function(msg)
         end
 
     -- ------------------------------------------------------------------
-    -- statsreport
+    -- statsreport [filter]
     -- ------------------------------------------------------------------
     elseif cmd == "statsreport" then
         local pns   = DB.per_node_stats or {}
@@ -1240,16 +1260,52 @@ SlashCmdList["MGL"] = function(msg)
             print("  Open the gathering journal — MGL will list what still needs scanning.")
             return
         end
-        print(string.format("|cff66ccffMGL|r per-node stats (%d entries):", total))
-        for prof, nodes in pairs(pns) do
-            for nodeName, entry in pairs(nodes) do
-                print(string.format("  [%s] %-36s  F:%s D:%s P:%s  (%s)",
-                    prof, nodeName,
-                    tostring(entry.finesse), tostring(entry.deftness),
-                    tostring(entry.perception), entry.source or "?"))
+
+        -- Optional substring filter, case-insensitive.  Multi-word
+        -- args get joined so "/mgl statsreport mana lily" works.
+        local filter = nil
+        if #args >= 2 then
+            filter = table.concat(args, " ", 2):lower()
+        end
+
+        -- Stable sort within each profession so output isn't pairs() chaos.
+        local function sortedList(t)
+            local keys = {}
+            for k in pairs(t) do table.insert(keys, k) end
+            table.sort(keys)
+            return keys
+        end
+
+        local shown, matched = 0, 0
+        local lines = {}
+        for _, prof in ipairs(sortedList(pns)) do
+            for _, nodeName in ipairs(sortedList(pns[prof])) do
+                local entry = pns[prof][nodeName]
+                local hay   = (prof .. " " .. nodeName):lower()
+                if not filter or hay:find(filter, 1, true) then
+                    matched = matched + 1
+                    table.insert(lines, string.format(
+                        "  [%s] %-36s  F:%s D:%s P:%s  (%s)",
+                        prof, nodeName,
+                        tostring(entry.finesse), tostring(entry.deftness),
+                        tostring(entry.perception), entry.source or "?"))
+                end
             end
         end
-        for prof, gs in pairs(DB.user_stats or {}) do
+
+        if filter then
+            print(string.format(
+                "|cff66ccffMGL|r per-node stats matching '%s' (%d of %d):",
+                filter, matched, total))
+        else
+            print(string.format(
+                "|cff66ccffMGL|r per-node stats (%d entries):", total))
+        end
+        for _, line in ipairs(lines) do print(line) end
+
+        -- Global stats footer (always shown — they're cheap and useful).
+        for _, prof in ipairs(sortedList(DB.user_stats or {})) do
+            local gs = DB.user_stats[prof]
             if next(gs) then
                 print(string.format("  [%s] (global)  F:%s D:%s P:%s",
                     prof,
@@ -1259,7 +1315,7 @@ SlashCmdList["MGL"] = function(msg)
         end
 
     -- ------------------------------------------------------------------
-    -- specreport — KP summary per spec tree tab
+    -- specreport — KP summary per spec tree tab, with sub-node detail
     -- ------------------------------------------------------------------
     elseif cmd == "specreport" then
         if not C_ProfSpecs then
@@ -1269,6 +1325,56 @@ SlashCmdList["MGL"] = function(msg)
         if not next(professionConfigIDs) then
             print("|cff66ccffMGL|r open your professions window first, then re-run.")
             return
+        end
+
+        -- Resolve a node's display name.  Path is:
+        --   nodeInfo.definitionEntryIDs[1]
+        --     -> C_Traits.GetEntryInfo(configID, entryID).definitionID
+        --     -> C_Traits.GetDefinitionInfo(definitionID).spellID
+        --     -> C_Spell.GetSpellName(spellID)
+        -- With fallbacks at each step.  Wrapped in pcall because trait
+        -- definitions occasionally have nil intermediates after a spec
+        -- reset and we don't want one bad node to abort the whole report.
+        local function getNodeName(traitConfigID, nodeID)
+            local ok, nodeInfo = pcall(C_Traits.GetNodeInfo, traitConfigID, nodeID)
+            if not ok or type(nodeInfo) ~= "table" then return nil, nodeInfo end
+            local entryIDs = nodeInfo.entryIDs
+                          or nodeInfo.definitionEntryIDs
+            if type(entryIDs) ~= "table" or not entryIDs[1] then
+                return nil, nodeInfo
+            end
+            local entryID = entryIDs[1]
+            -- Newer API: entryID -> entryInfo.definitionID -> definitionInfo.spellID
+            local defID
+            if C_Traits.GetEntryInfo then
+                local eok, entryInfo = pcall(
+                    C_Traits.GetEntryInfo, traitConfigID, entryID)
+                if eok and type(entryInfo) == "table" then
+                    defID = entryInfo.definitionID
+                end
+            end
+            -- Fallback: some node entries put the def ID directly in
+            -- definitionEntryIDs (older naming carried over for compat).
+            defID = defID or entryID
+            if not defID or not C_Traits.GetDefinitionInfo then
+                return nil, nodeInfo
+            end
+            local dok, defInfo = pcall(C_Traits.GetDefinitionInfo, defID)
+            if not dok or type(defInfo) ~= "table" then return nil, nodeInfo end
+            local spellID = defInfo.spellID or defInfo.overrideSpellID
+            if spellID then
+                if C_Spell and C_Spell.GetSpellName then
+                    local sn = C_Spell.GetSpellName(spellID)
+                    if sn then return sn, nodeInfo end
+                end
+                -- C_Spell.GetSpellName is the modern name; fall back to
+                -- the deprecated global only if the modern one is absent.
+                if GetSpellInfo then
+                    local sn = select(1, GetSpellInfo(spellID))
+                    if sn then return sn, nodeInfo end
+                end
+            end
+            return defInfo.overrideName or defInfo.name, nodeInfo
         end
 
         local anyData = false
@@ -1287,17 +1393,19 @@ SlashCmdList["MGL"] = function(msg)
                     local ti    = C_ProfSpecs.GetTabInfo
                                   and C_ProfSpecs.GetTabInfo(tabID)
                     local name  = (type(ti) == "table" and ti.name) or ("tab_" .. tabID)
+
+                    -- Per-tab KP totals (sum across the tree's nodes).
                     local purchased, maxTotal, current = 0, 0, 0
-                    if traitConfigID and C_Traits and C_Traits.GetTreeNodes then
-                        local nodeIDs = C_Traits.GetTreeNodes(tabID) or {}
-                        for _, nodeID in ipairs(nodeIDs) do
-                            local info = C_Traits.GetNodeInfo
-                                         and C_Traits.GetNodeInfo(traitConfigID, nodeID)
-                            if info then
-                                purchased = purchased + (info.ranksPurchased or 0)
-                                maxTotal  = maxTotal  + (info.maxRanks      or 0)
-                                current   = current   + (info.currentRank   or 0)
-                            end
+                    local nodeIDs = (C_Traits and C_Traits.GetTreeNodes
+                                     and traitConfigID
+                                     and C_Traits.GetTreeNodes(tabID)) or {}
+                    for _, nodeID in ipairs(nodeIDs) do
+                        local info = C_Traits.GetNodeInfo
+                                     and C_Traits.GetNodeInfo(traitConfigID, nodeID)
+                        if info then
+                            purchased = purchased + (info.ranksPurchased or 0)
+                            maxTotal  = maxTotal  + (info.maxRanks      or 0)
+                            current   = current   + (info.currentRank   or 0)
                         end
                     end
                     local grantNote = (current ~= purchased)
@@ -1305,6 +1413,44 @@ SlashCmdList["MGL"] = function(msg)
                         or ""
                     print(string.format("  %-28s  %3d / %d kp%s",
                         name, purchased, maxTotal, grantNote))
+
+                    -- Sub-node tree, walked by path so the indent matches
+                    -- the visual hierarchy in the spec window.  Skip
+                    -- nodes with maxRanks=0 (invisible / restricted /
+                    -- not-yet-unlocked branches) so the output stays
+                    -- focused on real choices.
+                    if traitConfigID and C_ProfSpecs.GetRootPathForTab then
+                        local rootPath = C_ProfSpecs.GetRootPathForTab(tabID)
+                        if rootPath then
+                            local function walk(pathID, depth)
+                                local indent = string.rep("  ", depth + 2)
+                                local nodeName, nodeInfo = getNodeName(
+                                    traitConfigID, pathID)
+                                local cur = nodeInfo and nodeInfo.currentRank   or 0
+                                local pur = nodeInfo and nodeInfo.ranksPurchased or 0
+                                local mx  = nodeInfo and nodeInfo.maxRanks      or 0
+                                if mx > 0 then
+                                    -- Show as `name  cur/max` with a
+                                    -- " (+N grant)" tag when grants raise
+                                    -- the visible rank above purchased.
+                                    local tag = (cur > pur)
+                                        and string.format(" (+%d grant)", cur - pur)
+                                        or ""
+                                    print(string.format("%s%-28s  %d / %d%s",
+                                        indent,
+                                        nodeName or ("node_" .. pathID),
+                                        cur, mx, tag))
+                                end
+                                if C_ProfSpecs.GetChildrenForPath then
+                                    for _, child in ipairs(
+                                            C_ProfSpecs.GetChildrenForPath(pathID) or {}) do
+                                        walk(child, depth + 1)
+                                    end
+                                end
+                            end
+                            walk(rootPath, 0)
+                        end
+                    end
                 end
             end
         end
@@ -1780,16 +1926,26 @@ SlashCmdList["MGL"] = function(msg)
     -- help
     -- ------------------------------------------------------------------
     else
+        -- Lay out as a {command, description} table and pad with
+        -- string.format so adding a new command never requires
+        -- recounting spaces.  WoW's chat font is variable-width so
+        -- this won't be pixel-perfect, but it's monospaced-character
+        -- consistent (33 chars per command column).
+        local entries = {
+            { "status | pause | resume",     "show or toggle logging state"   },
+            { "reset [events|sessions]",     "wipe data (confirms first)"     },
+            { "export",                      "open CSV popup + chat summary"  },
+            { "setstats <prof> [src] stat=N","set per-node or global stats"   },
+            { "statsreport [filter]",        "show all captured per-node stats" },
+            { "specreport",                  "KP summary per spec tree tab"   },
+            { "scanjournal <prof> [source]", "read stats from open journal"   },
+            { "minimap [show|hide]",         "toggle minimap button"          },
+            { "debug [on|off]",              "enable diagnostic commands"     },
+        }
         print(string.format(
-            "|cff66ccffMidnightGatherLogger|r v%s", VERSION))
-        print("  status | pause | resume")
-        print("  reset [events|sessions]      — wipe data (confirms first)")
-        print("  export                       — clipboard CSV + chat summary")
-        print("  setstats <prof> [src] stat=N — set per-node or global stats")
-        print("  statsreport                  — show all captured per-node stats")
-        print("  specreport                   — KP summary per spec tree tab")
-        print("  scanjournal <prof> [source]  — read stats from open journal")
-        print("  minimap [show|hide]          — toggle minimap button")
-        print("  debug [on|off]               — enable diagnostic commands")
+            "|cff66ccffMidnightGatherLogger|r v%s — commands:", VERSION))
+        for _, e in ipairs(entries) do
+            print(string.format("  %-30s — %s", e[1], e[2]))
+        end
     end
 end

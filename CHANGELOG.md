@@ -2,6 +2,30 @@
 
 All notable changes to MidnightGatherLogger are documented here.
 
+## [1.0.2] — 2026-05-17
+
+Follow-up release after live in-game testing of 1.0.1.
+
+### Fixed
+- **`/mgl export` clipboard copy was still broken** — even after switching to the documented global `CopyToClipboard(text, removeMarkup)`. In testing it returned 0 (silently refused). The Wowpedia page actually classifies it under **`API functions/restricted`**: it requires a hardware event in the right context, and the slash-command Enter keypress doesn't count. Replaced with the standard EditBox-popup pattern used by WeakAuras, TomTom, Talent Tree Tweaks, etc.: a popup window appears with the CSV pre-selected; the user presses Ctrl+A (already selected) then Ctrl+C to copy. The user's own keypress IS a hardware event, so this works universally.
+
+### Added
+- **`specreport` now shows subnode detail.** Previous behaviour only showed three lines per profession (one per tab with totals). Now it also walks the path tree under each tab via `C_ProfSpecs.GetRootPathForTab` and `GetChildrenForPath`, resolves each node's name through `C_Traits.GetEntryInfo → GetDefinitionInfo → C_Spell.GetSpellName`, and prints an indented hierarchy with `current / max` ranks. Nodes with `maxRanks = 0` (invisible, restricted, locked-out branches) are skipped so the output stays focused on real choices. Grant ranks above purchased are tagged `(+N grant)`.
+- **`statsreport [filter]`** — case-insensitive substring filter over `profession + name`. Examples: `/mgl statsreport sanguithorn`, `/mgl statsreport mana lily`, `/mgl statsreport mining`. With no filter the behavior is unchanged. Output is now also sorted alphabetically within each profession instead of `pairs()`-order chaos.
+
+### Changed
+- **`/mgl help` output uses programmatic alignment.** Commands are stored as a `{ "cmd", "description" }` table and printed via `string.format("%-30s — %s", ...)`. Adding a new command no longer requires recounting spaces by hand. (WoW chat is variable-width, so it won't be pixel-perfect, but it'll be uniform per-character.)
+
+### Verified during 1.0.1 → 1.0.2 testing (no fix needed)
+- Addon loads cleanly with BugSack+BugGrabber enabled, no errors.
+- `/mgl status` reports correctly: `events:N sessions:N auctionator:yes stats:52/52` after journal scrape.
+- `detectdebug` confirms the depth-cap of 3 is correct: 18 sidebar matches at depth=5 are correctly excluded; the one title-panel match at depth=2 (marked `[markup stripped]`, meaning it carried `|c..|r` color codes which were stripped before comparison) is what gets selected.
+- Recorded stat values (F:370 D:84 P:80) decode to 37.0% / 14.0% / 8.0% via the empirical `PCT_TO_RAW` factors — plausible for current gear.
+- Auto-detection via `/mgl scanjournal herbalism` on a clicked source works ("auto-detected: Sanguithorn" → "saved herbalism / Sanguithorn — F:370 D:84 P:80").
+- `"all known sources have per-node stats"` is the success message when nothing is missing, not a stale-state warning.
+
+---
+
 ## [1.0.1] — 2026-05-16
 
 Bug-fix release. Audited every Blizzard and Auctionator API call against the patch 12.0.5 (Midnight) documentation. Several were "guessed at" and either didn't exist or had wrong signatures.
